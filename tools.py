@@ -5,6 +5,7 @@ allowed (identity gate), whether values are valid, what actually changes, and wh
 status is legitimate.
 """
 import json
+import re
 import uuid
 from datetime import datetime
 
@@ -13,6 +14,8 @@ from validation import (COLLECTABLE, OPTIONAL, WRITABLE_DATA, Invalid, is_comple
                         merge_skills, record_issues, validate_field)
 
 NOTES_MAX = 4000
+# Free-text fields whose value must literally appear in the conversation (see Session._ungrounded).
+GROUNDED = ("full_name", "email", "college", "branch", "linkedin_url", "github_url", "skills")
 TRACKING = ("collection_status", "attempt_count", "last_contacted_at", "notes")
 
 TOOL_SPECS = [
@@ -82,6 +85,20 @@ class Session:
         self.saved_fields = []            # fields written during this chat
         self.finalized = False
         self.final_status = None
+        self.chat_texts = []              # candidate + agent messages, for the grounding check
+
+    def _ungrounded(self, name, value):
+        """Free-text values must appear in the chat (typed by the candidate, or suggested by the
+        agent and then confirmed). Catches the LLM inventing e.g. a branch nobody mentioned.
+        Returns the offending value, or None. Enums, numbers and dates are format-validated only."""
+        if name not in GROUNDED:
+            return None
+        said = _squash(" ".join(self.chat_texts))
+        for v in (value if isinstance(value, list) else [value]):
+            core = re.sub(r"^https?://(www\.)?", "", v) if name.endswith("_url") else v
+            if _squash(core) not in said:
+                return v
+        return None
 
     # ---------- helpers ----------
     def _context(self):
@@ -175,15 +192,20 @@ class Session:
                 rejected[name] = "not a writable application field"
                 continue
             try:
-                norm = validate_field(name, value)
+                norm = raw = validate_field(name, value)
                 if name == "skills":
-                    norm = merge_skills(self.record.get("skills"), norm)
+                    norm = merge_skills(self.record.get("skills"), raw)
             except Invalid as e:
                 rejected[name] = str(e)
                 continue
             old = self.record.get(name)
             if norm == old:
                 unchanged.append(name)
+                continue
+            ungrounded = self._ungrounded(name, raw)
+            if ungrounded:
+                rejected[name] = (f"{ungrounded!r} does not appear in anything said in this chat. Never "
+                                  "infer or assume a value: ask the candidate, or suggest it and let them confirm")
                 continue
             old_is_valid = False
             if old not in (None, "", []):
@@ -292,6 +314,11 @@ class Session:
             return {"error": f"bad arguments for {name}: {e}"}
         except APIError as e:
             return {"error": f"database error: {e}"}
+
+
+def _squash(text):
+    """Lowercase, letters and digits only: "VJTI, Mumbai" ~ "vjti mumbai"."""
+    return re.sub(r"[^a-z0-9]", "", str(text).lower())
 
 
 def _append_note(existing, note):

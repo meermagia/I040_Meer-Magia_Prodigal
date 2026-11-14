@@ -75,7 +75,7 @@ agent.py --candidate-id c005
 |---|---|---|
 | `confirm_identity(is_candidate, evidence)` | Whether the reply confirms identity | Refused until the candidate has actually replied. Only then is the record (current values, missing, invalid) returned to the LLM. `false` → nothing is revealed, saves are blocked, outcome forced to `needs_human` |
 | `get_candidate()` | When to refresh | Blocked before identity |
-| `save_fields(fields, candidate_confirmed_change)` | What it extracted, when to save (batched), how to phrase rejections | Writable allowlist only (no phone/id/version/status). Every value validated. Only *changed* values sent. Replacing an existing **valid** value requires `candidate_confirmed_change=true`. Skills are merged, never replaced. First save moves status `pending → in_progress` |
+| `save_fields(fields, candidate_confirmed_change)` | What it extracted, when to save (batched), how to phrase rejections | Writable allowlist only (no phone/id/version/status). Every value validated. Free-text values must appear in the chat (grounding check, so the LLM can't invent them). Only *changed* values sent. Replacing an existing **valid** value requires `candidate_confirmed_change=true`. Skills are merged, never replaced. First save moves status `pending → in_progress` |
 | `end_conversation(outcome, summary, remaining_fields, refused_fields, follow_up_time)` | Which outcome, the summary, follow-up time | `completed` refused unless every mandatory field is valid. Wrong person → `needs_human`. No reply → `no_answer`. Left after giving data → `in_progress`. Increments `attempt_count` once, sets `last_contacted_at` (with +05:30 offset), appends a dated note (≤4000 chars, newest kept). Second call rejected, so no duplicate final write |
 
 So the LLM owns the conversation: wording, order, grouping, clarifying, extraction, tool choice,
@@ -156,9 +156,9 @@ nudge → `no_answer`; EOF → `no_answer`; no-chat on a complete record with on
 503s retried; quoted `If-Match` and PATCH response shape confirmed. I checked the database state
 after the runs with a GET.
 
-**Mock-tested only** (`tests/test_core.py`, 42 tests, no network): 409 conflict handling, same
+**Mock-tested only** (`tests/test_core.py`, 45 tests, no network): 409 conflict handling, same
 Idempotency-Key on network retry, 422/409 not retried, identity gate, overwrite protection,
-skills merge, status guard, notes cap, validators.
+skills merge, status guard, notes cap, validators, grounding check.
 
 **Known limitations:**
 - **LLM quota.** The Gemini key is free tier: **20 requests/day per model**, and a chat uses
@@ -168,12 +168,17 @@ skills merge, status guard, notes cap, validators.
   of the run. Lite models are less polished at conversation. Switching models *mid-chat* has not
   been tested (Gemini 3 "thought signatures" may not carry across models). A paid key or a
   higher-quota provider removes the problem with no code change.
-- **The lite model can invent values.** In the one web-UI run
+- **The lite model invented a value once; now guarded.** In the web-UI run
   ([`runs/20261114-152059_c007`](runs/20261114-152059_c007.md)) the candidate said "B.Tech at
   VJTI Mumbai" and `gemini-3.1-flash-lite` also saved `branch = "Computer Science"`, which the
-  candidate never said. Validation can't catch a plausible-but-unstated value. Fix next: have
-  `save_fields` require a short verbatim `source_quote` per field and check it against the
-  candidate's actual messages, and/or use a stronger model.
+  candidate never said. `save_fields` now has a **grounding check**: a free-text value (name,
+  email, college, branch, URLs, skills) must appear in the chat (case and punctuation ignored),
+  either typed by the candidate or suggested by the agent and then confirmed. Otherwise it is
+  rejected with a reason so the LLM asks. Replaying that exact tool call through the new code
+  rejects `branch` and still saves the other three fields. That replay and the unit tests are
+  offline; I haven't run the guard in a live chat yet (LLM quota). Not covered: enums, numbers
+  and dates (e.g. an invented CGPA would pass if it's in range). c007's stored branch from that
+  run is still wrong in the workspace until a reset.
 - Most sample runs' candidate replies were piped in, not typed live (LLM and API side are
   real). The web-UI run was typed into the browser.
 - Ctrl+C goes through the same fallback as LLM failure, but I haven't triggered it with a real

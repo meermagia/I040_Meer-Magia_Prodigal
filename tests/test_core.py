@@ -63,6 +63,8 @@ def confirmed(record, **kw):
     s, api = session(record, **kw)
     s.identity_asked = True
     s.candidate_replies = 1
+    # what the candidate "said", so free-text values pass the grounding check
+    s.chat_texts.append("t@x.com new@x.com kabir.shah@gmail.com me@x.com go Rust")
     assert s.confirm_identity(True)["identity"] is True
     return s, api
 
@@ -250,3 +252,25 @@ def test_409_and_422_not_retried(monkeypatch):
     with pytest.raises(api_mod.APIError) as e:
         client.patch_candidate("c1", {"cgpa": 8.0}, 1)
     assert e.value.status == 422 and len(calls) == 2
+
+
+# ---------------- grounding (the LLM may not invent free-text values)
+def test_invented_branch_is_rejected():
+    s, api = confirmed(rec(branch=None, degree=None))
+    s.chat_texts.append("I study B.Tech at VJTI Mumbai")
+    out = s.save_fields({"degree": "B.Tech", "branch": "Computer Science"})
+    assert "branch" in out["rejected"] and out["saved"] == ["degree"]
+    assert "branch" not in api.patches[0][0]
+
+
+def test_value_suggested_by_agent_and_confirmed_is_accepted():
+    s, api = confirmed(rec(branch=None))
+    s.chat_texts += ["Is your branch Computer Science?", "yes"]
+    assert s.save_fields({"branch": "Computer Science"})["saved"] == ["branch"]
+
+
+def test_grounding_ignores_punctuation_case_and_url_scheme():
+    s, api = confirmed(rec(college=None))
+    s.chat_texts.append("college is vjti mumbai, github.com/octocat")
+    out = s.save_fields({"college": "VJTI, Mumbai", "github_url": "https://github.com/octocat"})
+    assert set(out["saved"]) == {"college", "github_url"}
