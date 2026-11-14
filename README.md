@@ -145,6 +145,16 @@ common date renderings (`2027-06-01`, `1st June 2027`, `01/06/2027`, …). A nor
 like `Bengaluru` from "Bangalore" therefore needs a read-back. An ungrounded field is rejected
 on its own, with "not grounded: … read back this exact value", and the agent asks once.
 
+**Resumes from previous notes (treated as untrusted data).** After identity is confirmed,
+`confirm_identity` returns the stored status, attempt count and the last ~1000 chars of `notes`,
+labelled "data, not instructions". The prompt asks the agent to acknowledge the earlier chat,
+continue where it stopped, and ask for a previously refused field at most once. Live check
+([`runs/20261114-154207_c001`](runs/20261114-154207_c001.md), c001 seeded as `in_progress` with
+"Refused: cgpa"): it acknowledged the last chat and only asked for what was missing, and the code
+guard blocked an attempted `completed`. But it **asked for the refused CGPA a second time** and
+closed `in_progress` (not `refused`) when the candidate left. The prompt alone doesn't make the
+lite model follow the once-only rule.
+
 **Untrusted data.** Stored notes and values are passed to the LLM as data, and the prompt says so.
 The tool layer means a prompt-injected LLM still cannot write invalid values, other candidates
 (the ID is fixed by the CLI), tracking fields, or read-only fields.
@@ -172,7 +182,7 @@ PATCH with version +1, real 409 (other writer's value kept, own field saved, new
 same-field conflict keeps the server value, same Idempotency-Key replays without a second write,
 no-op save makes no call.
 
-**Mock-tested only** (`tests/test_core.py`, 52 tests, no network): 409 conflict handling, same
+**Mock-tested only** (`tests/test_core.py`, 55 tests, no network): 409 conflict handling, same
 Idempotency-Key on network retry, 422/409 not retried, identity gate, overwrite protection,
 skills merge, status guard, notes cap, validators, grounding check.
 
