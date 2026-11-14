@@ -25,6 +25,8 @@ clarifying question. Resolve relative dates against today and confirm the exact 
    - degree must be one of {degrees}; location one of {locations}; duration 2, 3 or 6 months;
      graduation year 2026-2028; CGPA on a 10-point scale (never convert percentages yourself);
      available_from an exact date between 2026-01-01 and 2027-12-31.
+   - save_fields rejects values that were never stated or read back; if a field is rejected as \
+'not grounded', read back the exact value and save after the candidate confirms.
    - Optional fields (linkedin_url, github_url, skills): you may ask once at the end, lightly. \
 Never block on them.
 6. End with end_conversation exactly once, then send a short closing message:

@@ -191,7 +191,7 @@ def agent_turn(conv):
             if conv.echo:
                 print(f"\n{BOLD}Riya:{RESET} {text}\n")
             log.say("Agent", text)
-            session.chat_texts.append(text)
+            session.chat_log.append(("assistant", text))
             texts.append(text)
             session.identity_asked = True
         return texts, events
@@ -263,7 +263,7 @@ def start_session(cid, interface="cli", echo=False):
 def run_turn(conv, user_text):
     """One candidate message → the agent's response (with any tool calls it made)."""
     conv.session.candidate_replies += 1
-    conv.session.chat_texts.append(user_text)
+    conv.session.chat_log.append(("user", user_text))
     conv.log.say("Candidate", user_text)
     conv.messages.append({"role": "user", "content": user_text})
     return _safe_turn(conv)

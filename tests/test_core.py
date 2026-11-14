@@ -64,7 +64,7 @@ def confirmed(record, **kw):
     s.identity_asked = True
     s.candidate_replies = 1
     # what the candidate "said", so free-text values pass the grounding check
-    s.chat_texts.append("t@x.com new@x.com kabir.shah@gmail.com me@x.com go Rust")
+    s.chat_log.append(("user", "t@x.com new@x.com kabir.shah@gmail.com me@x.com go Rust cgpa 8.4 9.0 8.0"))
     assert s.confirm_identity(True)["identity"] is True
     return s, api
 
@@ -254,23 +254,77 @@ def test_409_and_422_not_retried(monkeypatch):
     assert e.value.status == 422 and len(calls) == 2
 
 
-# ---------------- grounding (the LLM may not invent free-text values)
-def test_invented_branch_is_rejected():
-    s, api = confirmed(rec(branch=None, degree=None))
-    s.chat_texts.append("I study B.Tech at VJTI Mumbai")
-    out = s.save_fields({"degree": "B.Tech", "branch": "Computer Science"})
-    assert "branch" in out["rejected"] and out["saved"] == ["degree"]
+# ---------------- grounding (MOCKED): only stated or confirmed values are written
+def grounded_session(**kw):
+    s, api = confirmed(rec(**kw))
+    s.chat_log.clear()
+    return s, api
+
+
+def test_c007_invented_branch_rejected_others_saved():
+    s, api = grounded_session(branch=None, degree=None, college=None)
+    s.chat_log.append(("user", "I study B.Tech at VJTI Mumbai"))
+    out = s.save_fields({"degree": "B.Tech", "college": "VJTI Mumbai", "branch": "Computer Science"})
+    assert out["rejected"]["branch"].startswith("not grounded: 'Computer Science'")
+    assert set(out["saved"]) == {"degree", "college"}
     assert "branch" not in api.patches[0][0]
 
 
-def test_value_suggested_by_agent_and_confirmed_is_accepted():
-    s, api = confirmed(rec(branch=None))
-    s.chat_texts += ["Is your branch Computer Science?", "yes"]
+def test_readback_confirmed_accepts():
+    s, api = grounded_session(branch=None)
+    s.chat_log += [("assistant", "So that's B.Tech in Computer Science, right?"), ("user", "yes")]
     assert s.save_fields({"branch": "Computer Science"})["saved"] == ["branch"]
 
 
-def test_grounding_ignores_punctuation_case_and_url_scheme():
-    s, api = confirmed(rec(college=None))
-    s.chat_texts.append("college is vjti mumbai, github.com/octocat")
-    out = s.save_fields({"college": "VJTI, Mumbai", "github_url": "https://github.com/octocat"})
-    assert set(out["saved"]) == {"college", "github_url"}
+def test_readback_without_reply_rejected():
+    s, api = grounded_session(branch=None)
+    s.chat_log += [("user", "hi"), ("assistant", "So that's Computer Science, right?")]
+    assert "branch" in s.save_fields({"branch": "Computer Science"})["rejected"] and api.patches == []
+
+
+def test_bangalore_needs_readback_for_bengaluru():
+    s, api = grounded_session(preferred_location=None)
+    s.chat_log.append(("user", "Bangalore please"))
+    assert "preferred_location" in s.save_fields({"preferred_location": "Bangalore"})["rejected"]
+    s.chat_log += [("assistant", "Just to confirm: Bengaluru?"), ("user", "yes")]
+    assert s.save_fields({"preferred_location": "Bengaluru"})["saved"] == ["preferred_location"]
+
+
+def test_numbers_must_match_what_was_said():
+    s, api = grounded_session(graduation_year=None)
+    s.chat_log.append(("user", "cgpa is 8.4 and I graduate in 2027"))
+    assert "cgpa" in s.save_fields({"cgpa": 8.5})["rejected"]
+    out = s.save_fields({"cgpa": 8.4, "graduation_year": 2027})
+    assert set(out["saved"]) == {"cgpa", "graduation_year"}
+
+
+def test_dates_grounded_by_explicit_date_or_readback():
+    s, api = grounded_session(available_from=None)
+    s.chat_log.append(("user", "next June works"))
+    assert "available_from" in s.save_fields({"available_from": "2027-06-01"})["rejected"]
+    s.chat_log += [("assistant", "Shall I put 1 June 2027?"), ("user", "yes")]
+    assert s.save_fields({"available_from": "2027-06-01"})["saved"] == ["available_from"]
+    s2, _ = grounded_session(available_from=None)
+    s2.chat_log.append(("user", "I can start 1st June 2027"))
+    assert s2.save_fields({"available_from": "2027-06-01"})["saved"] == ["available_from"]
+
+
+def test_email_typed_verbatim_accepted():
+    s, api = grounded_session()
+    s.chat_log.append(("user", "it's vikram.rao@outlook.com"))
+    assert s.save_fields({"email": "vikram.rao@outlook.com"})["saved"] == ["email"]
+
+
+def test_mixed_call_patches_only_grounded_field():
+    s, api = grounded_session()
+    s.chat_log.append(("user", "my cgpa is 7.9"))
+    out = s.save_fields({"cgpa": 7.9, "email": "made.up@x.com"})
+    assert out["saved"] == ["cgpa"] and "email" in out["rejected"]
+    assert api.patches[0][0] == {"cgpa": 7.9, "collection_status": "in_progress"}
+
+
+def test_ungrounded_skills_dropped_grounded_kept():
+    s, api = grounded_session()
+    s.chat_log.append(("user", "I know Rust"))
+    out = s.save_fields({"skills": ["Rust", "Haskell"]})
+    assert api.record["skills"] == ["Go", "Rust"] and "Haskell" in out["rejected"]["skills"]

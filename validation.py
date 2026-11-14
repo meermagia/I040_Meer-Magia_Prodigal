@@ -197,3 +197,55 @@ def record_issues(record):
 def is_complete(record):
     missing, invalid = record_issues(record)
     return not missing and not invalid
+
+
+# ---------------------------------------------------------------- grounding
+# A value may be written only if it was stated by the candidate, or read back to them by the
+# agent and followed by a candidate reply (the LLM judges whether that reply was a "yes").
+_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August",
+           "September", "October", "November", "December"]
+_STRING_FIELDS = ("full_name", "college", "branch", "degree", "preferred_location", "email",
+                  "linkedin_url", "github_url")
+_NUMBER_FIELDS = ("cgpa", "graduation_year", "internship_duration_months")
+
+
+def _norm(s, keep_dot=False):
+    s = re.sub(r"[^a-z0-9@.]", "", str(s).lower())
+    return s if keep_dot else s.replace(".", "")
+
+
+def _words(s):
+    return " " + re.sub(r"[^a-z0-9]+", " ", str(s).lower()).strip() + " "
+
+
+def _ordinal(n):
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+def is_grounded(field, value, candidate_texts, confirmed_readbacks):
+    """True if `value` for `field` appears in what the candidate said or confirmed."""
+    raw = " ".join(list(candidate_texts) + list(confirmed_readbacks))
+    if field in _STRING_FIELDS:
+        v = str(value)
+        if field.endswith("_url"):
+            v = re.sub(r"^https?://(www\.)?", "", v)
+        keep = field == "email"
+        return bool(_norm(v, keep)) and _norm(v, keep) in _norm(raw, keep)
+    if field in _NUMBER_FIELDS:
+        x = float(value)
+        tokens = {str(value), f"{x:.2f}", f"{x:.1f}"}
+        if x.is_integer():
+            tokens.add(str(int(x)))
+        low = raw.lower()
+        return any(re.search(rf"(?<![\d.]){re.escape(t)}(?![\d]|\.\d)", low) for t in tokens)
+    if field == "available_from":
+        d = date.fromisoformat(str(value))
+        m, mon, y, o = _MONTHS[d.month - 1], _MONTHS[d.month - 1][:3], d.year, _ordinal(d.day)
+        renderings = [d.isoformat(), f"{d.day} {m} {y}", f"{m} {d.day} {y}", f"{d.day} {mon} {y}",
+                      f"{mon} {d.day} {y}", f"{d.day:02d}/{d.month:02d}/{y}", f"{m} {o} {y}",
+                      f"{o} {m} {y}", f"{o} {mon} {y}", f"{mon} {o} {y}", f"{o} of {m} {y}"]
+        hay = _words(raw)
+        return any(_words(r) in hay for r in renderings)
+    if field == "skills":
+        return all(is_grounded("branch", s, candidate_texts, confirmed_readbacks) for s in value)
+    return True

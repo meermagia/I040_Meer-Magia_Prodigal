@@ -11,11 +11,9 @@ from datetime import datetime
 
 from api import APIError, Conflict
 from validation import (COLLECTABLE, OPTIONAL, WRITABLE_DATA, Invalid, is_complete,
-                        merge_skills, record_issues, validate_field)
+                        is_grounded, merge_skills, record_issues, validate_field)
 
 NOTES_MAX = 4000
-# Free-text fields whose value must literally appear in the conversation (see Session._ungrounded).
-GROUNDED = ("full_name", "email", "college", "branch", "linkedin_url", "github_url", "skills")
 TRACKING = ("collection_status", "attempt_count", "last_contacted_at", "notes")
 
 TOOL_SPECS = [
@@ -85,20 +83,14 @@ class Session:
         self.saved_fields = []            # fields written during this chat
         self.finalized = False
         self.final_status = None
-        self.chat_texts = []              # candidate + agent messages, for the grounding check
+        self.chat_log = []                # [(role, text)] candidate ("user") and agent ("assistant") messages
 
-    def _ungrounded(self, name, value):
-        """Free-text values must appear in the chat (typed by the candidate, or suggested by the
-        agent and then confirmed). Catches the LLM inventing e.g. a branch nobody mentioned.
-        Returns the offending value, or None. Enums, numbers and dates are format-validated only."""
-        if name not in GROUNDED:
-            return None
-        said = _squash(" ".join(self.chat_texts))
-        for v in (value if isinstance(value, list) else [value]):
-            core = re.sub(r"^https?://(www\.)?", "", v) if name.endswith("_url") else v
-            if _squash(core) not in said:
-                return v
-        return None
+    def _grounding_sources(self):
+        """Candidate messages, plus agent messages the candidate replied to afterwards (read-backs)."""
+        candidate = [t for r, t in self.chat_log if r == "user"]
+        readbacks = [t for i, (r, t) in enumerate(self.chat_log)
+                     if r == "assistant" and any(r2 == "user" for r2, _ in self.chat_log[i + 1:])]
+        return candidate, readbacks
 
     # ---------- helpers ----------
     def _context(self):
@@ -202,10 +194,18 @@ class Session:
             if norm == old:
                 unchanged.append(name)
                 continue
-            ungrounded = self._ungrounded(name, raw)
-            if ungrounded:
-                rejected[name] = (f"{ungrounded!r} does not appear in anything said in this chat. Never "
-                                  "infer or assume a value: ask the candidate, or suggest it and let them confirm")
+            # Grounding: only write what the candidate stated or confirmed after a read-back.
+            candidate, readbacks = self._grounding_sources()
+            if name == "skills":
+                bad = [x for x in raw if not is_grounded("skills", [x], candidate, readbacks)]
+                if bad:
+                    rejected[name] = _not_grounded(", ".join(bad))
+                    raw = [x for x in raw if x not in bad]
+                    norm = merge_skills(self.record.get("skills"), raw)
+                    if not raw or norm == old:
+                        continue
+            elif not is_grounded(name, norm, candidate, readbacks):
+                rejected[name] = _not_grounded(norm)
                 continue
             old_is_valid = False
             if old not in (None, "", []):
@@ -316,10 +316,9 @@ class Session:
             return {"error": f"database error: {e}"}
 
 
-def _squash(text):
-    """Lowercase, letters and digits only: "VJTI, Mumbai" ~ "vjti mumbai"."""
-    return re.sub(r"[^a-z0-9]", "", str(text).lower())
-
+def _not_grounded(value):
+    return (f"not grounded: '{value}' was never stated by the candidate or read back to them. "
+            "Read back this exact value and save only after they confirm.")
 
 def _append_note(existing, note):
     text = (existing + "\n" if existing else "") + note

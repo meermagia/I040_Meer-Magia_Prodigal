@@ -75,7 +75,7 @@ agent.py --candidate-id c005
 |---|---|---|
 | `confirm_identity(is_candidate, evidence)` | Whether the reply confirms identity | Refused until the candidate has actually replied. Only then is the record (current values, missing, invalid) returned to the LLM. `false` → nothing is revealed, saves are blocked, outcome forced to `needs_human` |
 | `get_candidate()` | When to refresh | Blocked before identity |
-| `save_fields(fields, candidate_confirmed_change)` | What it extracted, when to save (batched), how to phrase rejections | Writable allowlist only (no phone/id/version/status). Every value validated. Free-text values must appear in the chat (grounding check, so the LLM can't invent them). Only *changed* values sent. Replacing an existing **valid** value requires `candidate_confirmed_change=true`. Skills are merged, never replaced. First save moves status `pending → in_progress` |
+| `save_fields(fields, candidate_confirmed_change)` | What it extracted, when to save (batched), how to phrase rejections | Writable allowlist only (no phone/id/version/status). Every value validated, then grounding-checked (see Decisions). Only *changed* values sent. Replacing an existing **valid** value requires `candidate_confirmed_change=true`. Skills are merged, never replaced. First save moves status `pending → in_progress` |
 | `end_conversation(outcome, summary, remaining_fields, refused_fields, follow_up_time)` | Which outcome, the summary, follow-up time | `completed` refused unless every mandatory field is valid. Wrong person → `needs_human`. No reply → `no_answer`. Left after giving data → `in_progress`. Increments `attempt_count` once, sets `last_contacted_at` (with +05:30 offset), appends a dated note (≤4000 chars, newest kept). Second call rejected, so no duplicate final write |
 
 So the LLM owns the conversation: wording, order, grouping, clarifying, extraction, tool choice,
@@ -134,6 +134,15 @@ never applied twice. **409:** re-GET. Fields another writer changed meanwhile ar
 clobbered) and reported to the LLM. The rest is retried once with a new key. A second 409 is
 reported, not looped. 401/403/404/422 are not retried. The agent never calls `/v1/reset`.
 
+**Grounding check:** `save_fields` only writes values the candidate stated or confirmed after a
+read-back. This is enforced in code (`validation.is_grounded`), not just the prompt. A value must
+appear in a candidate message, or in an agent message the candidate replied to afterwards
+("So that's 1 June 2027?" then "yes"). Matching ignores case and punctuation for text and enums
+(`BTech` = `B.Tech`), matches numbers as whole tokens (`8.4` doesn't match `8.45`), and accepts
+common date renderings (`2027-06-01`, `1st June 2027`, `01/06/2027`, …). A normalised value
+like `Bengaluru` from "Bangalore" therefore needs a read-back. An ungrounded field is rejected
+on its own, with "not grounded: … read back this exact value", and the agent asks once.
+
 **Untrusted data.** Stored notes and values are passed to the LLM as data, and the prompt says so.
 The tool layer means a prompt-injected LLM still cannot write invalid values, other candidates
 (the ID is fixed by the CLI), tracking fields, or read-only fields.
@@ -156,7 +165,7 @@ nudge → `no_answer`; EOF → `no_answer`; no-chat on a complete record with on
 503s retried; quoted `If-Match` and PATCH response shape confirmed. I checked the database state
 after the runs with a GET.
 
-**Mock-tested only** (`tests/test_core.py`, 45 tests, no network): 409 conflict handling, same
+**Mock-tested only** (`tests/test_core.py`, 51 tests, no network): 409 conflict handling, same
 Idempotency-Key on network retry, 422/409 not retried, identity gate, overwrite protection,
 skills merge, status guard, notes cap, validators, grounding check.
 
@@ -168,17 +177,13 @@ skills merge, status guard, notes cap, validators, grounding check.
   of the run. Lite models are less polished at conversation. Switching models *mid-chat* has not
   been tested (Gemini 3 "thought signatures" may not carry across models). A paid key or a
   higher-quota provider removes the problem with no code change.
-- **The lite model invented a value once; now guarded.** In the web-UI run
+- **Inferred values: mitigated in code.** In the web-UI run
   ([`runs/20261114-152059_c007`](runs/20261114-152059_c007.md)) the candidate said "B.Tech at
-  VJTI Mumbai" and `gemini-3.1-flash-lite` also saved `branch = "Computer Science"`, which the
-  candidate never said. `save_fields` now has a **grounding check**: a free-text value (name,
-  email, college, branch, URLs, skills) must appear in the chat (case and punctuation ignored),
-  either typed by the candidate or suggested by the agent and then confirmed. Otherwise it is
-  rejected with a reason so the LLM asks. Replaying that exact tool call through the new code
-  rejects `branch` and still saves the other three fields. That replay and the unit tests are
-  offline; I haven't run the guard in a live chat yet (LLM quota). Not covered: enums, numbers
-  and dates (e.g. an invented CGPA would pass if it's in range). c007's stored branch from that
-  run is still wrong in the workspace until a reset.
+  VJTI Mumbai" and the lite model also saved `branch = "Computer Science"`. The grounding check
+  now rejects that exact call (unit test + replay of the logged call). Remaining limits: whether
+  the reply to a read-back was a "yes" is judged by the LLM, and substring matching can't catch a
+  wrong value that happens to appear elsewhere in the chat. c007's stored branch from that run is
+  still wrong in the workspace until a reset.
 - Most sample runs' candidate replies were piped in, not typed live (LLM and API side are
   real). The web-UI run was typed into the browser.
 - Ctrl+C goes through the same fallback as LLM failure, but I haven't triggered it with a real
