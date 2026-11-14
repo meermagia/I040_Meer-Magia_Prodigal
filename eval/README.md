@@ -91,3 +91,11 @@ the turns used, the wall time, the data fields that changed, and the run-log nam
 None so far. The harness uses only the public core API (`load_env`, `start_session`, `run_turn`,
 `run_event`, `finish_session`) and reads `Session._grounding_sources()`. If that private method is
 renamed, the `grounded` check breaks, so a public alias would be cleaner.
+
+## Results so far
+
+| scenario | run live? | result | report |
+|---|---|---|---|
+| `already_complete` | yes | PASS (0 LLM calls) | [`results/20261114-154640_live.md`](results/20261114-154640_live.md) |
+| `wrong_person` | yes | PASS (4 LLM calls, zero data writes) | [`results/20261114-155627_live.md`](results/20261114-155627_live.md) |
+| the other 6 | not yet (LLM quota) | dry-run validated only | [`results/20261114-154624_dry.md`](results/20261114-154624_dry.md) |
