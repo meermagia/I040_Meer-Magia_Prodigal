@@ -22,11 +22,12 @@ class Conflict(APIError):
 
 
 class CandidateAPI:
-    def __init__(self, base_url, api_key, timeout=20.0, log=None, max_retries=3):
+    def __init__(self, base_url, api_key, timeout=20.0, log=None, max_retries=3, transport=None):
         self.client = httpx.Client(
             base_url=base_url.rstrip("/"),
             headers={"Authorization": f"Bearer {api_key}"},
             timeout=timeout,
+            transport=transport,
         )
         self.log = log or (lambda event, **kw: None)
         self.max_retries = max_retries

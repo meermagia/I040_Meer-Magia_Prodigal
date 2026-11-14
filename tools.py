@@ -13,6 +13,7 @@ from validation import (COLLECTABLE, OPTIONAL, WRITABLE_DATA, Invalid, is_comple
                         merge_skills, record_issues, validate_field)
 
 NOTES_MAX = 4000
+TRACKING = ("collection_status", "attempt_count", "last_contacted_at", "notes")
 
 TOOL_SPECS = [
     {"type": "function", "function": {
@@ -96,12 +97,17 @@ class Session:
             "previous_notes_UNTRUSTED_DATA": self.record.get("notes"),
         }
 
-    def _patch(self, fields):
-        """PATCH with If-Match. On 409, re-read and retry once with only still-safe changes."""
+    def _patch(self, fields, note=None):
+        """PATCH with quoted If-Match and a fresh Idempotency-Key per logical change.
+
+        On 409: re-read, keep values another writer changed meanwhile, and retry once with
+        only the still-safe diff (new key, since the body differs). A second 409 is raised.
+        """
         base = dict(self.record)
+        dropped = []
         for attempt in (1, 2):
             if not fields:
-                return {"changed": [], "dropped_due_to_conflict": []}
+                return {"changed": [], "dropped_due_to_conflict": dropped}
             try:
                 updated = self.api.patch_candidate(self.cid, fields, self.record["version"],
                                                    idempotency_key=str(uuid.uuid4()))
@@ -109,28 +115,33 @@ class Session:
                 if attempt == 2:
                     raise
                 fresh = self.api.get_candidate(self.cid)
-                dropped = []
                 retry = {}
                 for k, v in fields.items():
+                    if k in TRACKING:
+                        continue  # recomputed below from the fresh record
                     if fresh.get(k) == v:
-                        continue  # someone already wrote the same value
-                    if fresh.get(k) != base.get(k) and k not in ("notes", "attempt_count", "collection_status", "last_contacted_at"):
-                        dropped.append(k)  # changed concurrently by someone else: do not clobber
+                        continue  # already has our value
+                    if fresh.get(k) != base.get(k):
+                        dropped.append(k)  # someone else changed it meanwhile: don't clobber
                         continue
                     retry[k] = v
-                if "notes" in fields:  # re-append our note to the newest notes
-                    retry["notes"] = _append_note(fresh.get("notes"), self._pending_note) if getattr(self, "_pending_note", None) else fields["notes"]
+                if "collection_status" in fields:
+                    retry["collection_status"] = fields["collection_status"]
+                if "last_contacted_at" in fields:
+                    retry["last_contacted_at"] = fields["last_contacted_at"]
                 if "attempt_count" in fields:
                     retry["attempt_count"] = min((fresh.get("attempt_count") or 0) + 1, 50)
+                if "notes" in fields and note:
+                    retry["notes"] = _append_note(fresh.get("notes"), note)
+                retry = {k: v for k, v in retry.items() if fresh.get(k) != v}
                 self.record = fresh
                 fields = retry
-                self._conflict_dropped = dropped
                 continue
             if isinstance(updated, dict) and "version" in updated:
-                self.record = updated
+                self.record = updated  # PATCH returns the full updated record
             else:
                 self.record = self.api.get_candidate(self.cid)
-            return {"changed": list(fields), "dropped_due_to_conflict": getattr(self, "_conflict_dropped", [])}
+            return {"changed": list(fields), "dropped_due_to_conflict": dropped}
 
     # ---------- tools ----------
     def confirm_identity(self, is_candidate, evidence=""):
@@ -193,7 +204,6 @@ class Session:
                 n: f"already stored as {self.record.get(n)!r}; confirm with the candidate, then call again "
                    "with candidate_confirmed_change=true" for n in needs_confirm}
         if accepted:
-            self._conflict_dropped = []
             try:
                 out = self._patch(accepted)
             except APIError as e:
@@ -247,7 +257,6 @@ class Session:
         if follow_up_time:
             parts.append("Follow up: " + follow_up_time + ".")
         note = " ".join(parts)
-        self._pending_note = note
         patch = {
             "collection_status": outcome,
             "attempt_count": min((self.record.get("attempt_count") or 0) + 1, 50),
@@ -255,9 +264,8 @@ class Session:
             "notes": _append_note(self.record.get("notes"), note),
         }
         patch = {k: v for k, v in patch.items() if self.record.get(k) != v}
-        self._conflict_dropped = []
         try:
-            self._patch(patch)
+            self._patch(patch, note=note)
         except APIError as e:
             return {"error": f"Could not save the outcome: {e}"}
         self.finalized = True
