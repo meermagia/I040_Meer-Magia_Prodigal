@@ -1,0 +1,25 @@
+{
+  "mode": "live",
+  "stamp": "20261114-155627",
+  "results": [
+    {
+      "scenario": "wrong_person",
+      "candidate_id": "c002",
+      "passed": true,
+      "checks": {
+        "status": true,
+        "fields": true,
+        "unchanged": true,
+        "grounded": true,
+        "attempts": true,
+        "turns": true
+      },
+      "notes": [],
+      "final_status": "needs_human",
+      "turns": 1,
+      "llm_calls": 4,
+      "wall_seconds": 15.0,
+      "run_log": "20261114-155609_c002"
+    }
+  ]
+}

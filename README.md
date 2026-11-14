@@ -48,6 +48,10 @@ trace) and `.md` (transcript).
 
 ## Architecture
 
+Diagram and walkthrough: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Demo helpers:
+`python scripts/show.py <id>` (record with ✓/✗/⚠ per field, read-only) and
+`python scripts/reset.py --yes` (restore the workspace; never used by the agent).
+
 ```
 agent.py --candidate-id c005
   │
@@ -188,9 +192,9 @@ skills merge, status guard, notes cap, validators, grounding check.
 
 **Known limitations:**
 - **LLM quota.** The Gemini key is free tier: **20 requests/day per model**, and a chat uses
-  about 8–12. `gemini-3-flash-preview` (used for most sample runs) ran out during testing, so the
-  default is now a chain of flash-lite models (`LLM_MODEL` + comma-separated
-  `LLM_FALLBACK_MODEL`). A model that returns a daily-quota 429 is skipped instantly for the rest
+  about 8–12. `gemini-3-flash-preview` (used for most sample runs) ran out during testing, so a fresh key
+  is used for the live evaluation, with the default set to `gemini-3.5-flash` and a fallback chain
+  (`LLM_FALLBACK_MODEL`, comma-separated) down to the flash-lite models. A model that returns a daily-quota 429 is skipped instantly for the rest
   of the run. Lite models are less polished at conversation. Switching models *mid-chat* has not
   been tested (Gemini 3 "thought signatures" may not carry across models). A paid key or a
   higher-quota provider removes the problem with no code change.
