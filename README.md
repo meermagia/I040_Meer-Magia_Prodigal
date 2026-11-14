@@ -17,6 +17,19 @@ python agent.py --candidate-id c001 --timeout 60
 
 Python 3.9+. Tests (mocked, no network): `python -m pytest -q tests`.
 
+### Web UI (optional)
+
+Instead of the last command you can run `streamlit run web.py`. This is a chat page over the
+**same agent core**: `agent.start_session` / `run_turn` / `finish_session` are what the CLI
+calls too, so the LLM loop, tools, validation and status guard are identical. The sidebar
+("Operator view") has a candidate picker, a live checklist of mandatory fields (only names and
+✓/✗/⚠ until identity is confirmed; values after), status/version/attempts, and a **Candidate
+leaves / End chat** button (the same path as `/quit`). Tool calls appear as coloured chips
+under each agent message, with full args/results in "Agent actions". Runs are logged to `runs/`
+with `"interface": "web"`. The silence timeout is CLI-only. **Closing the browser tab without
+clicking "Candidate leaves" skips the end-of-session write**: the CLI's `finally` guard covers
+that case, but the web UI can't detect a closed tab.
+
 **Chatting:** the person at the keyboard plays the candidate. Type a reply and press Enter.
 The chat ends when:
 
@@ -155,7 +168,14 @@ skills merge, status guard, notes cap, validators.
   of the run. Lite models are less polished at conversation. Switching models *mid-chat* has not
   been tested (Gemini 3 "thought signatures" may not carry across models). A paid key or a
   higher-quota provider removes the problem with no code change.
-- The sample runs' candidate replies were piped in, not typed live (LLM and API side are real).
+- **The lite model can invent values.** In the one web-UI run
+  ([`runs/20261114-152059_c007`](runs/20261114-152059_c007.md)) the candidate said "B.Tech at
+  VJTI Mumbai" and `gemini-3.1-flash-lite` also saved `branch = "Computer Science"`, which the
+  candidate never said. Validation can't catch a plausible-but-unstated value. Fix next: have
+  `save_fields` require a short verbatim `source_quote` per field and check it against the
+  candidate's actual messages, and/or use a stronger model.
+- Most sample runs' candidate replies were piped in, not typed live (LLM and API side are
+  real). The web-UI run was typed into the browser.
 - Ctrl+C goes through the same fallback as LLM failure, but I haven't triggered it with a real
   keypress in a test.
 - The 409 path is only mock-tested. I didn't force a real conflict against the live API.

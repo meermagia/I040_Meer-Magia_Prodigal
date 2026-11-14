@@ -30,3 +30,9 @@ terminal shows `You:` with the reply missing; the transcript has the actual text
 
 Runs before `150502` used `gemini-3-flash-preview`. That model's free-tier daily quota
 (20 requests) ran out during testing (see the main README).
+
+**Web UI run** (typed into the Streamlit page, `"interface": "web"` in the trace):
+
+| Run | Candidate | Scenario | Outcome |
+|---|---|---|---|
+| `20261114-152059_c007` | c007 | Confirms identity, gives email + "B.Tech at VJTI Mumbai", then the operator clicks "Candidate leaves". **The model also saved `branch = Computer Science`, which the candidate never said** (see the main README's limitations) | `in_progress`, attempt 3 |

@@ -130,9 +130,47 @@ def start_reader():
     return q
 
 
-# ---------------------------------------------------------------- agent turn
-def agent_turn(llm, messages, session, log):
+# ---------------------------------------------------------------- shared conversation core
+# Used by both the CLI (main below) and the web UI (web.py), so both behave identically.
+class Conversation:
+    def __init__(self, cid, interface, echo):
+        self.cid = cid
+        self.interface = interface
+        self.echo = echo            # print to terminal (CLI) or stay quiet (web)
+        self.log = RunLog(cid)
+        self.log("start", interface=interface)
+        self.api = CandidateAPI(os.environ["CANDIDATE_API_BASE_URL"], os.environ["CANDIDATE_API_KEY"],
+                                timeout=float(os.environ.get("CANDIDATE_API_TIMEOUT_SECONDS", 20)), log=self.log)
+        self.record = None
+        self.session = None
+        self.llm = None
+        self.messages = []
+        self.no_chat = None         # message when no conversation was needed
+        self.first = None           # TurnResult of the greeting
+        self.closed = False
+        self.reason = None
+
+
+class TurnResult:
+    def __init__(self, texts, tool_events, conv, error=None):
+        self.texts = texts
+        self.tool_events = tool_events
+        self.ended = bool(conv.session and conv.session.finalized)
+        self.final_status = conv.session.final_status if conv.session else None
+        self.error = error
+
+
+def load_env():
+    load_dotenv(ROOT / ".env")
+    for var in ("CANDIDATE_API_BASE_URL", "CANDIDATE_API_KEY", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
+        if not os.environ.get(var):
+            raise RuntimeError(f"Missing {var} in .env (see .env.example)")
+
+
+def agent_turn(conv):
     """Let the LLM act until it produces a message for the candidate (or hits the step cap)."""
+    llm, messages, session, log = conv.llm, conv.messages, conv.session, conv.log
+    texts, events = [], []
     for _ in range(MAX_TOOL_STEPS):
         msg = llm.complete(messages)
         messages.append(msg.model_dump(exclude_none=True))
@@ -142,17 +180,34 @@ def agent_turn(llm, messages, session, log):
                 log("tool", name=tc.function.name, args=tc.function.arguments, result=result)
                 line = summarize_result(tc.function.name, result)
                 log.say("tool", line)
-                print(f"{DIM}  · {line}{RESET}")
+                events.append({"name": tc.function.name, "args": tc.function.arguments, "result": result, "line": line})
+                if conv.echo:
+                    print(f"{DIM}  · {line}{RESET}")
                 messages.append({"role": "tool", "tool_call_id": tc.id,
                                  "content": json.dumps(result, default=str)})
             continue
         text = (msg.content or "").strip()
         if text:
-            print(f"\n{BOLD}Riya:{RESET} {text}\n")
+            if conv.echo:
+                print(f"\n{BOLD}Riya:{RESET} {text}\n")
             log.say("Agent", text)
+            texts.append(text)
             session.identity_asked = True
-        return
+        return texts, events
     log("warning", message="tool step cap reached")
+    return texts, events
+
+
+def _safe_turn(conv):
+    try:
+        texts, events = agent_turn(conv)
+        return TurnResult(texts, events, conv)
+    except LLMDown as e:
+        conv.reason = f"LLM unavailable: {e}"
+        if conv.echo:
+            print(f"\nThe language model is unavailable ({e}).")
+        finish_session(conv, conv.reason, left=False)
+        return TurnResult([], [], conv, error=f"The assistant is unavailable right now ({e}). The chat was closed safely.")
 
 
 def event(messages, text, log):
@@ -161,118 +216,92 @@ def event(messages, text, log):
 
 
 def reconcile_complete(api, record, log):
-    """No chat needed: only fix a stale status, never touch attempts or data."""
+    """No chat needed: only fix a stale status, never touch attempts or data. Returns a message."""
     status = record.get("collection_status")
     if status == "completed":
-        print("Record is complete and already marked completed. Nothing to do; no chat started.")
-        return
+        return "Record is complete and already marked completed. Nothing to do; no chat started."
     if status == "needs_human":
-        print("Record data is complete but flagged needs_human; leaving it for a human. No chat started.")
-        return
+        return "Record data is complete but flagged needs_human; leaving it for a human. No chat started."
     api.patch_candidate(record["id"], {"collection_status": "completed"}, record["version"])
-    print(f"Record is complete; status corrected {status} → completed. No chat started.")
+    return f"Record is complete; status corrected {status} → completed. No chat started."
 
 
-def main():
-    ap = argparse.ArgumentParser(description="ACME candidate information collection agent")
-    ap.add_argument("--candidate-id", required=True)
-    ap.add_argument("--timeout", type=float, default=120,
-                    help="seconds of candidate silence before a nudge; a second silence ends the chat")
-    args = ap.parse_args()
-
-    load_dotenv(ROOT / ".env")
-    for var in ("CANDIDATE_API_BASE_URL", "CANDIDATE_API_KEY", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"):
-        if not os.environ.get(var):
-            sys.exit(f"Missing {var} in .env (see .env.example)")
-    tz = ZoneInfo(os.environ.get("AGENT_TIMEZONE", "Asia/Kolkata"))
-    cid = args.candidate_id.strip()
-    log = RunLog(cid)
-    api = CandidateAPI(os.environ["CANDIDATE_API_BASE_URL"], os.environ["CANDIDATE_API_KEY"],
-                       timeout=float(os.environ.get("CANDIDATE_API_TIMEOUT_SECONDS", 20)), log=log)
-
-    print(f"{DIM}Fetching candidate {cid}…{RESET}")
+def start_session(cid, interface="cli", echo=False):
+    """Fetch the candidate; either finish with no chat, or open the chat and get the greeting.
+    Raises APIError if the candidate can't be fetched."""
+    conv = Conversation(cid, interface, echo)
     try:
-        record = api.get_candidate(cid)
+        conv.record = conv.api.get_candidate(cid)
     except APIError as e:
-        log("abort", error=str(e))
-        log.close(f"# Run {cid}: aborted ({e})")
-        sys.exit({404: f"No candidate with id {cid}.", 401: "API key rejected (401)."}.get(e.status, f"API error: {e}"))
-
-    missing, invalid = record_issues(record)
-    log("plan", missing=missing, invalid=invalid, status=record.get("collection_status"))
+        conv.log("abort", error=str(e))
+        conv.log.close(f"# Run {cid}: aborted ({e})")
+        conv.closed = True
+        raise
+    missing, invalid = record_issues(conv.record)
+    conv.log("plan", missing=missing, invalid=invalid, status=conv.record.get("collection_status"))
     if not missing and not invalid:
         try:
-            reconcile_complete(api, record, log)
+            conv.no_chat = reconcile_complete(conv.api, conv.record, conv.log)
         except APIError as e:
-            print(f"Could not update status: {e}")
-        log.close(f"# Run {cid}: complete record, no chat")
-        return
-    print(f"{DIM}Needs attention → missing: {', '.join(missing) or '-'} | invalid: {', '.join(invalid) or '-'}{RESET}")
-    print(f"{DIM}Chat started. You are the candidate. Type /quit to leave; silence for {int(args.timeout)}s "
-          f"gets one nudge, then the chat closes.{RESET}")
-
-    session = Session(api, cid, record, tz, log)
-    llm = LLM(log)
+            conv.no_chat = f"Record is complete, but the status could not be updated: {e}"
+        conv.log.close(f"# Run {cid}: complete record, no chat")
+        conv.closed = True
+        return conv
+    tz = ZoneInfo(os.environ.get("AGENT_TIMEZONE", "Asia/Kolkata"))
+    conv.session = Session(conv.api, cid, conv.record, tz, conv.log)
+    conv.llm = LLM(conv.log)
     today = datetime.now(tz).strftime("%A, %d %B %Y")
-    messages = [{"role": "system", "content": build_system_prompt(record["full_name"], today)}]
-    event(messages, "Chat opened. Send your first message to the applicant.", log)
-    reason = None
-    q = start_reader()
-    try:
-        agent_turn(llm, messages, session, log)
-        silences = turns = 0
-        while not session.finalized and turns < MAX_TURNS:
-            turns += 1
-            print("You: ", end="", flush=True)
-            try:
-                line = q.get(timeout=args.timeout)
-            except queue.Empty:
-                print()
-                silences += 1
-                if silences == 1:
-                    event(messages, f"No reply for {int(args.timeout)} seconds. Send one short, friendly nudge.", log)
-                    agent_turn(llm, messages, session, log)
-                    continue
-                event(messages, "Still no reply after the nudge. The chat is over: call end_conversation now "
-                                "(no_answer if they never engaged, in_progress if they gave some info).", log)
-                agent_turn(llm, messages, session, log)
-                reason = "candidate stopped replying"
-                break
-            if line is None or line.strip().lower() in ("/quit", "/exit"):
-                if line is None:
-                    print()
-                event(messages, "The candidate left the chat (closed it). They cannot read further messages. "
-                                "Call end_conversation now with the right outcome.", log)
-                agent_turn(llm, messages, session, log)
-                reason = "candidate left the chat"
-                break
-            if not line.strip():
-                continue
-            silences = 0
-            session.candidate_replies += 1
-            log.say("Candidate", line)
-            messages.append({"role": "user", "content": line})
-            agent_turn(llm, messages, session, log)
-        else:
-            if not session.finalized:
-                reason = "turn limit reached"
-    except KeyboardInterrupt:
-        print()
-        reason = "interrupted (Ctrl+C)"
-    except LLMDown as e:
-        print(f"\nThe language model is unavailable ({e}).")
-        reason = f"LLM unavailable: {e}"
-    finally:
-        if not session.finalized:
-            fallback_close(session, reason or "chat ended without a recorded outcome", log)
-        status = session.final_status or "not saved"
-        print(f"{DIM}Outcome recorded: {status}. Log: {log.base.relative_to(ROOT)}.jsonl{RESET}")
-        log("end", status=session.final_status, reason=reason)
-        log.close(f"# Run {cid}: outcome {status}")
+    conv.messages = [{"role": "system", "content": build_system_prompt(conv.record["full_name"], today)}]
+    if echo:
+        print(f"{DIM}Needs attention → missing: {', '.join(missing) or '-'} | invalid: {', '.join(invalid) or '-'}{RESET}")
+    event(conv.messages, "Chat opened. Send your first message to the applicant.", conv.log)
+    conv.first = _safe_turn(conv)
+    return conv
 
 
-def fallback_close(session, reason, log):
+def run_turn(conv, user_text):
+    """One candidate message → the agent's response (with any tool calls it made)."""
+    conv.session.candidate_replies += 1
+    conv.log.say("Candidate", user_text)
+    conv.messages.append({"role": "user", "content": user_text})
+    return _safe_turn(conv)
+
+
+def run_event(conv, text):
+    """A chat-system event (silence, etc.) → the agent's response."""
+    event(conv.messages, text, conv.log)
+    return _safe_turn(conv)
+
+
+def finish_session(conv, reason, left=True):
+    """Close the conversation exactly once. If the candidate left, the LLM gets one step to call
+    end_conversation; anything still unrecorded goes through the deterministic fallback guard."""
+    if conv.closed:
+        return conv.session.final_status if conv.session else None
+    conv.reason = conv.reason or reason
+    result = None
+    if left and not conv.session.finalized:
+        event(conv.messages, "The candidate left the chat (closed it). They cannot read further messages. "
+                             "Call end_conversation now with the right outcome.", conv.log)
+        try:
+            texts, events = agent_turn(conv)
+            result = TurnResult(texts, events, conv)
+        except LLMDown as e:
+            conv.reason = f"{reason}; LLM unavailable: {e}"
+    if not conv.session.finalized:
+        fallback_close(conv, conv.reason or "chat ended without a recorded outcome")
+    conv.closed = True
+    status = conv.session.final_status or "not saved"
+    conv.log("end", status=conv.session.final_status, reason=conv.reason, interface=conv.interface)
+    conv.log.close(f"# Run {conv.cid} ({conv.interface}): outcome {status}")
+    if conv.echo:
+        print(f"{DIM}Outcome recorded: {status}. Log: {conv.log.base.relative_to(ROOT)}.jsonl{RESET}")
+    return result
+
+
+def fallback_close(conv, reason):
     """Deterministic close when the LLM did not record an outcome (Ctrl+C, LLM down, it forgot)."""
+    session, log = conv.session, conv.log
     if session.identity is False:
         outcome = "needs_human"
     elif session.candidate_replies == 0:
@@ -285,7 +314,69 @@ def fallback_close(session, reason, log):
     log("fallback_close", reason=reason, result=result)
     line = summarize_result("end_conversation", result)
     log.say("tool", f"fallback {line}")
-    print(f"{DIM}  · fallback {line}{RESET}")
+    if conv.echo:
+        print(f"{DIM}  · fallback {line}{RESET}")
+
+
+# ---------------------------------------------------------------- CLI
+def main():
+    ap = argparse.ArgumentParser(description="ACME candidate information collection agent")
+    ap.add_argument("--candidate-id", required=True)
+    ap.add_argument("--timeout", type=float, default=120,
+                    help="seconds of candidate silence before a nudge; a second silence ends the chat")
+    args = ap.parse_args()
+    try:
+        load_env()
+    except RuntimeError as e:
+        sys.exit(str(e))
+    cid = args.candidate_id.strip()
+
+    print(f"{DIM}Fetching candidate {cid}…{RESET}")
+    try:
+        conv = start_session(cid, interface="cli", echo=True)
+    except APIError as e:
+        sys.exit({404: f"No candidate with id {cid}.", 401: "API key rejected (401)."}.get(e.status, f"API error: {e}"))
+    if conv.no_chat:
+        print(conv.no_chat)
+        return
+    print(f"{DIM}Chat started. You are the candidate. Type /quit to leave; silence for {int(args.timeout)}s "
+          f"gets one nudge, then the chat closes.{RESET}")
+    session = conv.session
+    q = start_reader()
+    try:
+        silences = turns = 0
+        while not session.finalized and not conv.closed and turns < MAX_TURNS:
+            turns += 1
+            print("You: ", end="", flush=True)
+            try:
+                line = q.get(timeout=args.timeout)
+            except queue.Empty:
+                print()
+                silences += 1
+                if silences == 1:
+                    run_event(conv, f"No reply for {int(args.timeout)} seconds. Send one short, friendly nudge.")
+                    continue
+                run_event(conv, "Still no reply after the nudge. The chat is over: call end_conversation now "
+                                "(no_answer if they never engaged, in_progress if they gave some info).")
+                conv.reason = "candidate stopped replying"
+                break
+            if line is None or line.strip().lower() in ("/quit", "/exit"):
+                if line is None:
+                    print()
+                finish_session(conv, "candidate left the chat")
+                break
+            if not line.strip():
+                continue
+            silences = 0
+            run_turn(conv, line)
+        else:
+            if not session.finalized:
+                conv.reason = "turn limit reached"
+    except KeyboardInterrupt:
+        print()
+        conv.reason = "interrupted (Ctrl+C)"
+    finally:
+        finish_session(conv, conv.reason or "chat ended without a recorded outcome", left=False)
 
 
 if __name__ == "__main__":
