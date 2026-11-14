@@ -83,22 +83,30 @@ class LLM:
     def __init__(self, log):
         self.client = OpenAI(base_url=os.environ["LLM_BASE_URL"], api_key=os.environ["LLM_API_KEY"],
                              timeout=45, max_retries=0)
-        self.models = [m for m in [os.environ.get("LLM_MODEL"), os.environ.get("LLM_FALLBACK_MODEL")] if m]
+        chain = [os.environ.get("LLM_MODEL", "")] + os.environ.get("LLM_FALLBACK_MODEL", "").split(",")
+        self.models = [m.strip() for m in chain if m.strip()]
+        self.exhausted = set()  # models whose daily quota is used up: skip for the rest of the run
         self.log = log
 
     def complete(self, messages):
         last = None
         for model in self.models:
+            if model in self.exhausted:
+                continue
             for attempt in range(3):
                 t0 = time.time()
                 try:
                     r = self.client.chat.completions.create(model=model, messages=messages, tools=TOOL_SPECS)
                     self.log("llm", model=model, ms=int((time.time() - t0) * 1000))
                     return r.choices[0].message
-                except Exception as e:  # 429 / 5xx / timeouts: back off, then try the fallback model
+                except Exception as e:  # 429 / 5xx / timeouts: back off, then try the next model
                     last = e
-                    self.log("llm_error", model=model, attempt=attempt + 1, error=f"{type(e).__name__}: {str(e)[:300]}")
+                    msg = str(e)
+                    self.log("llm_error", model=model, attempt=attempt + 1, error=f"{type(e).__name__}: {msg[:600]}")
                     status = getattr(e, "status_code", None)
+                    if status == 429 and ("per day" in msg.lower() or "PerDay" in msg):
+                        self.exhausted.add(model)  # waiting won't help; move on now
+                        break
                     if status in (400, 401, 403, 404):
                         break
                     time.sleep(2 ** attempt)
