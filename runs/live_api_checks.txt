@@ -1,0 +1,15 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0 -- <repo>/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: <repo>
+configfile: pytest.ini
+plugins: anyio-4.12.1
+collecting ... collected 5 items
+
+tests/test_live_api.py::test_diff_only_write_increments_version_once PASSED [ 20%]
+tests/test_live_api.py::test_real_409_keeps_other_writer_and_retries_with_new_key PASSED [ 40%]
+tests/test_live_api.py::test_same_field_conflict_keeps_server_value PASSED [ 60%]
+tests/test_live_api.py::test_idempotency_key_replays_without_applying_twice PASSED [ 80%]
+tests/test_live_api.py::test_noop_save_makes_no_api_call PASSED          [100%]
+
+============================== 5 passed in 45.16s ==============================

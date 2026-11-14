@@ -15,7 +15,9 @@ cp .env.example .env        # then put your CANDIDATE_API_KEY and LLM_API_KEY in
 python agent.py --candidate-id c001 --timeout 60
 ```
 
-Python 3.9+. Tests (mocked, no network): `python -m pytest -q tests`.
+Python 3.9+. Tests (mocked, no network): `python -m pytest -q`. Live API integration tests
+(`pytest -m live`, resets the workspace): diff-only writes, real 409 recovery, same-field
+conflict, idempotency, no-op. Output in [`runs/live_api_checks.txt`](runs/live_api_checks.txt).
 
 ### Web UI (optional)
 
@@ -165,6 +167,11 @@ nudge → `no_answer`; EOF → `no_answer`; no-chat on a complete record with on
 503s retried; quoted `If-Match` and PATCH response shape confirmed. I checked the database state
 after the runs with a GET.
 
+**Live API integration tests** (`tests/test_live_api.py`, 5 tests, no LLM, all pass): diff-only
+PATCH with version +1, real 409 (other writer's value kept, own field saved, new key on retry),
+same-field conflict keeps the server value, same Idempotency-Key replays without a second write,
+no-op save makes no call.
+
 **Mock-tested only** (`tests/test_core.py`, 52 tests, no network): 409 conflict handling, same
 Idempotency-Key on network retry, 422/409 not retried, identity gate, overwrite protection,
 skills merge, status guard, notes cap, validators, grounding check.
@@ -193,7 +200,8 @@ skills merge, status guard, notes cap, validators, grounding check.
   real). The web-UI run was typed into the browser.
 - Ctrl+C goes through the same fallback as LLM failure, but I haven't triggered it with a real
   keypress in a test.
-- The 409 path is only mock-tested. I didn't force a real conflict against the live API.
+- 409 recovery and idempotency are verified live via integration tests (`pytest -m live`) but not
+  yet exercised inside a live LLM chat.
 - The agent asks for a 10-point CGPA but can't verify it is true, and the same goes for every
   answer. A suspicious-but-valid value (e.g. an email at a typo domain) isn't detected.
 - Terminal only, one candidate per run, no streaming output.
