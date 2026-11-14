@@ -1,0 +1,54 @@
+{
+  "mode": "dry",
+  "stamp": "20261114-154624",
+  "results": [
+    {
+      "scenario": "happy_multi_fact",
+      "candidate_id": "c001",
+      "passed": true,
+      "notes": []
+    },
+    {
+      "scenario": "invalid_then_corrected",
+      "candidate_id": "c008",
+      "passed": true,
+      "notes": []
+    },
+    {
+      "scenario": "ambiguous_readback",
+      "candidate_id": "c005",
+      "passed": true,
+      "notes": []
+    },
+    {
+      "scenario": "refuses_mandatory",
+      "candidate_id": "c004",
+      "passed": true,
+      "notes": []
+    },
+    {
+      "scenario": "continue_later",
+      "candidate_id": "c002",
+      "passed": true,
+      "notes": []
+    },
+    {
+      "scenario": "wrong_person",
+      "candidate_id": "c002",
+      "passed": true,
+      "notes": []
+    },
+    {
+      "scenario": "silence",
+      "candidate_id": "c007",
+      "passed": true,
+      "notes": []
+    },
+    {
+      "scenario": "already_complete",
+      "candidate_id": "c003",
+      "passed": true,
+      "notes": []
+    }
+  ]
+}

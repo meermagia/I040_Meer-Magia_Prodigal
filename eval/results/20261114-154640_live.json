@@ -1,0 +1,27 @@
+{
+  "mode": "live",
+  "stamp": "20261114-154640",
+  "results": [
+    {
+      "scenario": "already_complete",
+      "candidate_id": "c003",
+      "passed": true,
+      "checks": {
+        "status": true,
+        "fields": true,
+        "unchanged": true,
+        "grounded": true,
+        "attempts": true,
+        "turns": true
+      },
+      "notes": [
+        "Record is complete; status corrected pending \u2192 completed. No chat started."
+      ],
+      "final_status": "completed",
+      "turns": 0,
+      "llm_calls": 0,
+      "wall_seconds": 2.4,
+      "run_log": "20261114-154636_c003"
+    }
+  ]
+}
