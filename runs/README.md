@@ -36,3 +36,4 @@ Runs before `150502` used `gemini-3-flash-preview`. That model's free-tier daily
 | Run | Candidate | Scenario | Outcome |
 |---|---|---|---|
 | `20261114-152059_c007` | c007 | Confirms identity, gives email + "B.Tech at VJTI Mumbai", then the operator clicks "Candidate leaves". **The model also saved `branch = Computer Science`, which the candidate never said** (see the main README's limitations) | `in_progress`, attempt 3 |
+| `20261114-153417_c005` | c005 | CLI, after the grounding check: email given verbatim + "Bangalore". Saved `Bengaluru` because the agent's options question counted as a read-back. That gap was fixed afterwards (offline replay now rejects it) | `completed` |

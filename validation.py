@@ -224,6 +224,10 @@ def _ordinal(n):
 
 def is_grounded(field, value, candidate_texts, confirmed_readbacks):
     """True if `value` for `field` appears in what the candidate said or confirmed."""
+    options = {"degree": DEGREES, "preferred_location": LOCATIONS}.get(field)
+    if options:  # a message listing several options ("Mumbai, Bengaluru or Remote?") is a question, not a read-back
+        confirmed_readbacks = [t for t in confirmed_readbacks
+                               if sum(_norm(o) in _norm(t) for o in options) <= 1]
     raw = " ".join(list(candidate_texts) + list(confirmed_readbacks))
     if field in _STRING_FIELDS:
         v = str(value)

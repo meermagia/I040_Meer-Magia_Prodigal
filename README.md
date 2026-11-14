@@ -165,7 +165,7 @@ nudge → `no_answer`; EOF → `no_answer`; no-chat on a complete record with on
 503s retried; quoted `If-Match` and PATCH response shape confirmed. I checked the database state
 after the runs with a GET.
 
-**Mock-tested only** (`tests/test_core.py`, 51 tests, no network): 409 conflict handling, same
+**Mock-tested only** (`tests/test_core.py`, 52 tests, no network): 409 conflict handling, same
 Idempotency-Key on network retry, 422/409 not retried, identity gate, overwrite protection,
 skills merge, status guard, notes cap, validators, grounding check.
 
@@ -184,6 +184,11 @@ skills merge, status guard, notes cap, validators, grounding check.
   the reply to a read-back was a "yes" is judged by the LLM, and substring matching can't catch a
   wrong value that happens to appear elsewhere in the chat. c007's stored branch from that run is
   still wrong in the workspace until a reset.
+  The one live CLI check after adding it ([`runs/20261114-153417_c005`](runs/20261114-153417_c005.md))
+  found a gap. The agent's question "Mumbai, Bengaluru, or remote?" counted as a read-back, so
+  "Bangalore" → `Bengaluru` was saved without a real confirmation. Fixed right after: an agent
+  message listing several options of the same enum no longer counts as a read-back. A replay of
+  that logged call now rejects `preferred_location`. This fix is offline-tested only.
 - Most sample runs' candidate replies were piped in, not typed live (LLM and API side are
   real). The web-UI run was typed into the browser.
 - Ctrl+C goes through the same fallback as LLM failure, but I haven't triggered it with a real

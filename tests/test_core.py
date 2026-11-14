@@ -328,3 +328,12 @@ def test_ungrounded_skills_dropped_grounded_kept():
     s.chat_log.append(("user", "I know Rust"))
     out = s.save_fields({"skills": ["Rust", "Haskell"]})
     assert api.record["skills"] == ["Go", "Rust"] and "Haskell" in out["rejected"]["skills"]
+
+
+def test_options_list_is_not_a_readback():
+    """Live c005 run: 'Mumbai, Bengaluru, or remote?' + 'Bangalore' must not ground Bengaluru."""
+    s, api = grounded_session(preferred_location=None)
+    s.chat_log += [("assistant", "Do you prefer Mumbai, Bengaluru, or Remote?"), ("user", "I'd prefer Bangalore")]
+    assert "preferred_location" in s.save_fields({"preferred_location": "Bengaluru"})["rejected"]
+    s.chat_log += [("assistant", "Got it, so Bengaluru?"), ("user", "yes")]
+    assert s.save_fields({"preferred_location": "Bengaluru"})["saved"] == ["preferred_location"]
