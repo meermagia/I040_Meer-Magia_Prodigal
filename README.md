@@ -42,6 +42,8 @@ You:   ah that's a typo, I graduate in 2027
 
 ## Contents
 
+> New here? [`docs/Implementation_Explained.pdf`](docs/Implementation_Explained.pdf) explains the approach in plain words: why each choice was made, the alternatives, known weak spots, and future features.
+
 - [Quick start](#quick-start)
 - [Trying it out](#trying-it-out)
 - [Repository tour](#repository-tour)
